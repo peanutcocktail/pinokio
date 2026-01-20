@@ -298,6 +298,161 @@ const formatStartupError = (error) => {
     return String(error)
   }
 }
+const SESSION_COOKIE_TTL_DAYS = 90
+const SESSION_COOKIE_TTL_SEC = SESSION_COOKIE_TTL_DAYS * 24 * 60 * 60
+const SESSION_COOKIE_JAR_FILENAME = 'session-cookies.json'
+let sessionCookieSavePromise = null
+let isQuitting = false
+const getSessionCookieJarPath = () => path.join(app.getPath('userData'), SESSION_COOKIE_JAR_FILENAME)
+const buildCookieUrl = (cookie) => {
+  if (!cookie || !cookie.domain) {
+    return null
+  }
+  const host = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain
+  if (!host) {
+    return null
+  }
+  const scheme = cookie.secure ? 'https://' : 'http://'
+  const cookiePath = cookie.path && cookie.path.startsWith('/') ? cookie.path : '/'
+  return `${scheme}${host}${cookiePath}`
+}
+const serializeSessionCookie = (cookie) => {
+  const url = buildCookieUrl(cookie)
+  if (!url || typeof cookie.name !== 'string') {
+    return null
+  }
+  const entry = {
+    url,
+    name: cookie.name,
+    value: typeof cookie.value === 'string' ? cookie.value : '',
+    path: cookie.path && cookie.path.startsWith('/') ? cookie.path : '/',
+    secure: !!cookie.secure,
+    httpOnly: !!cookie.httpOnly
+  }
+  if (cookie.hostOnly !== true && cookie.domain) {
+    entry.domain = cookie.domain
+  }
+  if (cookie.sameSite) {
+    entry.sameSite = cookie.sameSite
+  }
+  if (cookie.priority) {
+    entry.priority = cookie.priority
+  }
+  if (cookie.sameParty != null) {
+    entry.sameParty = cookie.sameParty
+  }
+  if (cookie.sourceScheme) {
+    entry.sourceScheme = cookie.sourceScheme
+  }
+  if (Number.isInteger(cookie.sourcePort)) {
+    entry.sourcePort = cookie.sourcePort
+  }
+  return entry
+}
+const persistSessionCookies = () => {
+  if (sessionCookieSavePromise) {
+    return sessionCookieSavePromise
+  }
+  sessionCookieSavePromise = (async () => {
+    try {
+      const cookies = await session.defaultSession.cookies.get({})
+      const sessionCookies = cookies.filter((cookie) => cookie && cookie.session)
+      const entries = sessionCookies.map(serializeSessionCookie).filter(Boolean)
+      const jarPath = getSessionCookieJarPath()
+      if (!entries.length) {
+        await fs.promises.unlink(jarPath).catch((err) => {
+          if (err && err.code !== 'ENOENT') {
+            console.warn('[Session Cookies] Failed to remove jar', err)
+          }
+        })
+        return
+      }
+      const payload = {
+        version: 1,
+        savedAt: Date.now(),
+        cookies: entries
+      }
+      await fs.promises.mkdir(path.dirname(jarPath), { recursive: true }).catch(() => {})
+      await fs.promises.writeFile(jarPath, JSON.stringify(payload), 'utf8')
+    } catch (err) {
+      console.warn('[Session Cookies] Failed to persist', err)
+    } finally {
+      sessionCookieSavePromise = null
+    }
+  })()
+  return sessionCookieSavePromise
+}
+const restoreSessionCookies = async () => {
+  const jarPath = getSessionCookieJarPath()
+  let raw
+  try {
+    raw = await fs.promises.readFile(jarPath, 'utf8')
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') {
+      console.warn('[Session Cookies] Failed to read jar', err)
+    }
+    return
+  }
+  let data
+  try {
+    data = JSON.parse(raw)
+  } catch (err) {
+    console.warn('[Session Cookies] Failed to parse jar', err)
+    return
+  }
+  const entries = Array.isArray(data.cookies) ? data.cookies : []
+  if (!entries.length) {
+    return
+  }
+  const expirationDate = Math.floor(Date.now() / 1000) + SESSION_COOKIE_TTL_SEC
+  for (const entry of entries) {
+    if (!entry || !entry.url || !entry.name) {
+      continue
+    }
+    const details = {
+      url: entry.url,
+      name: entry.name,
+      value: typeof entry.value === 'string' ? entry.value : '',
+      path: entry.path || '/',
+      secure: !!entry.secure,
+      httpOnly: !!entry.httpOnly,
+      expirationDate
+    }
+    if (entry.domain) {
+      details.domain = entry.domain
+    }
+    if (entry.sameSite) {
+      details.sameSite = entry.sameSite
+    }
+    if (entry.priority) {
+      details.priority = entry.priority
+    }
+    if (entry.sameParty != null) {
+      details.sameParty = entry.sameParty
+    }
+    if (entry.sourceScheme) {
+      details.sourceScheme = entry.sourceScheme
+    }
+    if (Number.isInteger(entry.sourcePort)) {
+      details.sourcePort = entry.sourcePort
+    }
+    try {
+      await session.defaultSession.cookies.set(details)
+    } catch (err) {
+      console.warn('[Session Cookies] Failed to restore cookie', entry.name, err)
+    }
+  }
+}
+const clearPersistedSessionCookies = async () => {
+  const jarPath = getSessionCookieJarPath()
+  try {
+    await fs.promises.unlink(jarPath)
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') {
+      console.warn('[Session Cookies] Failed to remove jar', err)
+    }
+  }
+}
 function UpsertKeyValue(obj, keyToChange, value) {
   const keyToChangeLower = keyToChange.toLowerCase();
   for (const key of Object.keys(obj)) {
@@ -2144,6 +2299,7 @@ document.querySelector("form").addEventListener("submit", (e) => {
       icon: getSplashIcon()
     })
     try {
+      await restoreSessionCookies()
       try {
         const portInUse = await pinokiod.running(pinokiod.port)
         if (portInUse) {
@@ -2161,8 +2317,10 @@ document.querySelector("form").addEventListener("submit", (e) => {
           app.quit()
         },
         onrestart: () => {
-          app.relaunch();
-          app.exit()
+          persistSessionCookies().finally(() => {
+            app.relaunch()
+            app.exit()
+          })
         },
         onrefresh: (payload) => {
           try {
@@ -2185,7 +2343,9 @@ document.querySelector("form").addEventListener("submit", (e) => {
                 await window.webContents.session.clearStorageData()
               }
             }
-            
+
+            await clearPersistedSessionCookies()
+
             console.log("cleared all sessions")
           }
         }
@@ -2203,9 +2363,15 @@ document.querySelector("form").addEventListener("submit", (e) => {
     })
     app.on('before-quit', function(e) {
       if (pinokiod.kernel.kill) {
+        if (isQuitting) {
+          return
+        }
         e.preventDefault()
-        console.log('Cleaning up before quit', process.pid);
-        pinokiod.kernel.kill()
+        isQuitting = true
+        persistSessionCookies().finally(() => {
+          console.log('Cleaning up before quit', process.pid)
+          pinokiod.kernel.kill()
+        })
       }
     });
     app.on('window-all-closed', function () {
