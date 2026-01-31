@@ -1,4 +1,4 @@
-const {app, screen, shell, BrowserWindow, BrowserView, ipcMain, dialog, clipboard, session, desktopCapturer } = require('electron')
+const {app, screen, shell, BrowserWindow, BrowserView, ipcMain, dialog, clipboard, session, desktopCapturer, systemPreferences } = require('electron')
 const windowStateKeeper = require('electron-window-state');
 const fs = require('fs')
 const path = require("path")
@@ -68,6 +68,9 @@ let browserLogFilePath
 let browserLogFileReady = false
 let browserLogBuffer = []
 let browserLogWritePromise = Promise.resolve()
+let permissionHandlersInstalled = false
+const permissionPrompted = new Set()
+const permissionPromptInFlight = new Set()
 const safeParseUrl = (value, base) => {
   if (!value) {
     return null
@@ -1566,6 +1569,242 @@ const installInspectorHandlers = () => {
   })
 }
 
+const normalizePermissionList = (value) => {
+  if (!value) return []
+  const list = Array.isArray(value) ? value : [value]
+  return list.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
+}
+
+const permissionLabels = {
+  microphone: 'Microphone',
+  camera: 'Camera',
+  screen: 'Screen Recording',
+  screen_capture: 'Screen Recording'
+}
+
+const permissionHints = {
+  darwin: {
+    microphone: 'System Settings → Privacy & Security → Microphone',
+    camera: 'System Settings → Privacy & Security → Camera',
+    screen: 'System Settings → Privacy & Security → Screen Recording',
+    screen_capture: 'System Settings → Privacy & Security → Screen Recording'
+  },
+  win32: {
+    microphone: 'Settings → Privacy & security → Microphone (allow desktop apps)',
+    camera: 'Settings → Privacy & security → Camera (allow desktop apps)',
+    screen: 'Settings → Privacy & security → Screen recording',
+    screen_capture: 'Settings → Privacy & security → Screen recording'
+  },
+  linux: {
+    microphone: 'Check your sound settings (PipeWire/PulseAudio) and app permissions.',
+    camera: 'Check your video device permissions in system settings.',
+    screen: 'Check your desktop portal or compositor screen capture permissions.',
+    screen_capture: 'Check your desktop portal or compositor screen capture permissions.'
+  }
+}
+
+const getMediaAccessStatusSafe = (mediaType) => {
+  if (!systemPreferences || typeof systemPreferences.getMediaAccessStatus !== 'function') {
+    return 'unsupported'
+  }
+  try {
+    return systemPreferences.getMediaAccessStatus(mediaType)
+  } catch (_) {
+    return 'unknown'
+  }
+}
+
+const requestMediaPermission = async (permission) => {
+  const platform = process.platform
+  if (permission === 'microphone' || permission === 'camera') {
+    let granted = false
+    if (platform === 'darwin' && systemPreferences && typeof systemPreferences.askForMediaAccess === 'function') {
+      granted = await systemPreferences.askForMediaAccess(permission)
+    }
+    const status = getMediaAccessStatusSafe(permission)
+    if (status === 'granted') {
+      granted = true
+    }
+    return { status, granted }
+  }
+  if (permission === 'screen' || permission === 'screen_capture') {
+    const status = getMediaAccessStatusSafe('screen')
+    return { status, granted: status === 'granted' }
+  }
+  return { status: 'unsupported', granted: false }
+}
+
+const buildPermissionMessage = (platform, denied) => {
+  if (!denied.length) return ''
+  const items = denied.map((permission) => permissionLabels[permission] || permission)
+  const label = items.length === 1 ? items[0] : items.join(', ')
+  const hints = permissionHints[platform] || permissionHints.linux
+  const hint = denied.length === 1
+    ? (hints[denied[0]] || '')
+    : ''
+  if (hint) {
+    return `Pinokio needs ${label} access. Enable it in ${hint}.`
+  }
+  return `Pinokio needs ${label} access. Please enable it in your OS privacy settings.`
+}
+
+const installPermissionHandlers = () => {
+  if (permissionHandlersInstalled) {
+    return
+  }
+  permissionHandlersInstalled = true
+  ipcMain.handle('pinokio:request-permissions', async (event, payload = {}) => {
+    const permissions = normalizePermissionList(payload.permissions)
+    if (permissions.length === 0) {
+      return { ok: true, permissions: [], results: {}, denied: [] }
+    }
+    const results = {}
+    const denied = []
+    for (const permission of permissions) {
+      const result = await requestMediaPermission(permission)
+      results[permission] = result
+      if (!result.granted) {
+        denied.push(permission)
+      }
+    }
+    return {
+      ok: denied.length === 0,
+      permissions,
+      denied,
+      results,
+      platform: process.platform,
+      message: denied.length ? buildPermissionMessage(process.platform, denied) : ''
+    }
+  })
+}
+
+const resolveProjectFromUrl = (url) => {
+  if (!url || !root_url) {
+    return null
+  }
+  const rootParsed = safeParseUrl(root_url)
+  const parsed = safeParseUrl(url, rootParsed ? rootParsed.origin : undefined)
+  if (!rootParsed || !parsed || parsed.origin !== rootParsed.origin) {
+    return null
+  }
+  const pathname = (parsed.pathname || '').replace(/\/+$/, '')
+  const match = pathname.match(/^\/api\/([^/]+)$/)
+  if (!match) {
+    return null
+  }
+  try {
+    return decodeURIComponent(match[1])
+  } catch (_) {
+    return match[1]
+  }
+}
+
+const readProjectPermissions = async (project) => {
+  if (!project || !pinokiod || !pinokiod.kernel || !pinokiod.kernel.api || typeof pinokiod.kernel.api.meta !== 'function') {
+    return []
+  }
+  try {
+    const meta = await pinokiod.kernel.api.meta(project)
+    return normalizePermissionList(meta && meta.permissions)
+  } catch (err) {
+    console.warn('[PERMISSION] Failed to load permissions for', project, err)
+    return []
+  }
+}
+
+const canRequestPermission = (permission) => {
+  if (process.platform !== 'darwin') {
+    return false
+  }
+  return permission === 'microphone' || permission === 'camera'
+}
+
+const promptForProjectPermissions = async (webContents, project, permissions) => {
+  if (!permissions.length) {
+    return
+  }
+  const promptKey = `${project}:${permissions.join(',')}`
+  if (permissionPromptInFlight.has(promptKey) || permissionPrompted.has(promptKey)) {
+    return
+  }
+  const pending = []
+  const blocked = []
+  for (const permission of permissions) {
+    const statusTarget = (permission === 'screen' || permission === 'screen_capture') ? 'screen' : permission
+    const status = getMediaAccessStatusSafe(statusTarget)
+    if (status === 'granted') {
+      continue
+    }
+    if (status === 'denied') {
+      blocked.push(permission)
+    } else if (canRequestPermission(permission)) {
+      pending.push(permission)
+    } else {
+      blocked.push(permission)
+    }
+  }
+  if (pending.length === 0 && blocked.length === 0) {
+    return
+  }
+  permissionPromptInFlight.add(promptKey)
+  try {
+    const owner = webContents && !webContents.isDestroyed()
+      ? BrowserWindow.fromWebContents(webContents)
+      : null
+    const denied = blocked.slice()
+    if (pending.length > 0) {
+      const label = pending.map((permission) => permissionLabels[permission] || permission).join(', ')
+      const { response } = await dialog.showMessageBox(owner, {
+        type: 'info',
+        buttons: ['Allow', 'Not now'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'Permission required',
+        message: `Allow ${label} access?`,
+        detail: `This app requests ${label} access. Click "Allow" to show the OS permission prompt.`,
+        noLink: true
+      })
+      if (response === 0) {
+        for (const permission of pending) {
+          const result = await requestMediaPermission(permission)
+          if (!result.granted) {
+            denied.push(permission)
+          }
+        }
+      }
+    }
+    if (denied.length > 0) {
+      const message = buildPermissionMessage(process.platform, denied)
+      if (message) {
+        await dialog.showMessageBox(owner, {
+          type: 'warning',
+          buttons: ['OK'],
+          defaultId: 0,
+          message,
+          noLink: true
+        })
+      }
+    }
+  } finally {
+    permissionPromptInFlight.delete(promptKey)
+    permissionPrompted.add(promptKey)
+  }
+}
+
+const maybePromptProjectPermissions = (webContents, url) => {
+  const project = resolveProjectFromUrl(url)
+  if (!project) {
+    return
+  }
+  void (async () => {
+    const permissions = await readProjectPermissions(project)
+    if (!permissions.length) {
+      return
+    }
+    await promptForProjectPermissions(webContents, project, permissions)
+  })()
+}
+
 // Screenshot capture function for inspect mode
 const captureScreenshotRegion = async (bounds) => {
   try {
@@ -1904,10 +2143,12 @@ const attach = (event, webContents) => {
     launched = true
 
     updateBrowserConsoleTarget(webContents, url)
+    maybePromptProjectPermissions(webContents, url)
 
   })
   webContents.on('did-navigate-in-page', (event, url) => {
     updateBrowserConsoleTarget(webContents, url)
+    maybePromptProjectPermissions(webContents, url)
   })
   webContents.setWindowOpenHandler((config) => {
     let url = config.url
@@ -2236,6 +2477,7 @@ if (!gotTheLock) {
     app.userAgentFallback = "Pinokio"
 
     installInspectorHandlers()
+    installPermissionHandlers()
 
     // PROMPT
     let promptResponse

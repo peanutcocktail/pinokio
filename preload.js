@@ -63,6 +63,7 @@ window.electronAPI = {
   send: (type, msg) => {
     ipcRenderer.send(type, msg)
   },
+  requestPermissions: (payload) => ipcRenderer.invoke('pinokio:request-permissions', payload || {}),
   startInspector: (payload) => ipcRenderer.invoke('pinokio:start-inspector', payload || {}),
   stopInspector: () => ipcRenderer.invoke('pinokio:stop-inspector'),
   captureScreenshot: (screenshotRequest) => {
