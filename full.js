@@ -16,6 +16,20 @@ var theme
 var colors
 var splashWindow
 var splashIcon
+var updateBannerPayload
+var updateBannerDismissed = false
+var updateInfo = null
+var updateDownloadInFlight = false
+const updateTestMode = (() => {
+  const value = process.env.PINOKIO_TEST_UPDATE_BANNER
+  if (!value) {
+    return false
+  }
+  return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase())
+})()
+let updateTestInterval = null
+let updateTestTimeout = null
+const UPDATE_RELEASES_URL = 'https://github.com/peanutcocktail/pinokio/releases'
 const setWindowTitleBarOverlay = (win, overlay) => {
   if (!win || !win.setTitleBarOverlay) {
     return
@@ -47,6 +61,129 @@ const updateThemeColors = (payload = {}) => {
     colors = nextColors
   }
   applyTitleBarOverlayToAllWindows()
+}
+const stripHtmlTags = (value) => {
+  if (!value) {
+    return ''
+  }
+  return String(value).replace(/<[^>]*>/g, '')
+}
+const buildReleaseNotesPreview = (notes) => {
+  if (!notes) {
+    return ''
+  }
+  let text = ''
+  if (Array.isArray(notes)) {
+    text = notes.map((note) => note && (note.note || note.releaseNotes || note.title || '')).join('\n')
+  } else if (typeof notes === 'string') {
+    text = notes
+  } else {
+    text = String(notes)
+  }
+  const cleaned = stripHtmlTags(text).replace(/\r/g, '')
+  const lines = cleaned.split('\n').map((line) => line.trim()).filter(Boolean)
+  if (!lines.length) {
+    return ''
+  }
+  const firstLine = lines[0]
+  if (firstLine.length > 140) {
+    return `${firstLine.slice(0, 137)}...`
+  }
+  return firstLine
+}
+const buildProgressLabel = (progress) => {
+  if (!progress || typeof progress.percent !== 'number') {
+    return ''
+  }
+  const percent = Math.round(progress.percent)
+  if (typeof progress.transferred === 'number' && typeof progress.total === 'number' && progress.total > 0) {
+    const transferred = (progress.transferred / 1024 / 1024).toFixed(1)
+    const total = (progress.total / 1024 / 1024).toFixed(1)
+    return `${percent}% (${transferred} MB of ${total} MB)`
+  }
+  return `${percent}%`
+}
+const buildUpdateBannerPayload = (state, info, extra = {}) => {
+  const resolved = info || {}
+  return {
+    state,
+    version: resolved.version || '',
+    notesPreview: buildReleaseNotesPreview(resolved.releaseNotes),
+    releaseUrl: UPDATE_RELEASES_URL,
+    ...extra
+  }
+}
+const clearUpdateTestTimers = () => {
+  if (updateTestInterval) {
+    clearInterval(updateTestInterval)
+    updateTestInterval = null
+  }
+  if (updateTestTimeout) {
+    clearTimeout(updateTestTimeout)
+    updateTestTimeout = null
+  }
+}
+const showUpdateBannerTestAvailable = () => {
+  updateInfo = {
+    version: '99.9.9-test',
+    releaseNotes: 'Simulated update for banner testing.'
+  }
+  updateDownloadInFlight = false
+  updateBannerDismissed = false
+  showUpdateBanner(buildUpdateBannerPayload('available', updateInfo))
+}
+const startUpdateBannerTestDownload = () => {
+  if (!updateInfo) {
+    showUpdateBannerTestAvailable()
+  }
+  clearUpdateTestTimers()
+  updateDownloadInFlight = true
+  let progress = 0
+  const tick = () => {
+    progress = Math.min(100, progress + 6 + Math.random() * 12)
+    showUpdateBanner(buildUpdateBannerPayload('downloading', updateInfo, {
+      progressPercent: progress,
+      notesPreview: `${Math.round(progress)}%`
+    }))
+    if (progress >= 100) {
+      clearUpdateTestTimers()
+      updateDownloadInFlight = false
+      showUpdateBanner(buildUpdateBannerPayload('ready', updateInfo))
+    }
+  }
+  tick()
+  updateTestInterval = setInterval(tick, 320)
+}
+const simulateUpdateBannerRestart = () => {
+  clearUpdateTestTimers()
+  hideUpdateBanner()
+  updateTestTimeout = setTimeout(() => {
+    showUpdateBannerTestAvailable()
+  }, 800)
+}
+const dispatchUpdateBanner = (payload) => {
+  updateBannerPayload = payload
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return
+  }
+  if (payload && payload.state === 'available' && updateBannerDismissed) {
+    return
+  }
+  if (mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    if (!mainWindow.webContents.isLoading()) {
+      mainWindow.webContents.send('pinokio:update-banner', payload)
+    }
+  }
+}
+const showUpdateBanner = (payload) => {
+  if (payload && payload.state === 'available' && updateBannerDismissed) {
+    updateBannerPayload = payload
+    return
+  }
+  dispatchUpdateBanner(payload || updateBannerPayload)
+}
+const hideUpdateBanner = () => {
+  dispatchUpdateBanner({ state: 'hidden' })
 }
 let PORT
 //let PORT = 42000
@@ -1678,40 +1815,6 @@ const installPermissionHandlers = () => {
   })
 }
 
-const resolveProjectFromUrl = (url) => {
-  if (!url || !root_url) {
-    return null
-  }
-  const rootParsed = safeParseUrl(root_url)
-  const parsed = safeParseUrl(url, rootParsed ? rootParsed.origin : undefined)
-  if (!rootParsed || !parsed || parsed.origin !== rootParsed.origin) {
-    return null
-  }
-  const pathname = (parsed.pathname || '').replace(/\/+$/, '')
-  const match = pathname.match(/^\/api\/([^/]+)$/)
-  if (!match) {
-    return null
-  }
-  try {
-    return decodeURIComponent(match[1])
-  } catch (_) {
-    return match[1]
-  }
-}
-
-const readProjectPermissions = async (project) => {
-  if (!project || !pinokiod || !pinokiod.kernel || !pinokiod.kernel.api || typeof pinokiod.kernel.api.meta !== 'function') {
-    return []
-  }
-  try {
-    const meta = await pinokiod.kernel.api.meta(project)
-    return normalizePermissionList(meta && meta.permissions)
-  } catch (err) {
-    console.warn('[PERMISSION] Failed to load permissions for', project, err)
-    return []
-  }
-}
-
 const canRequestPermission = (permission) => {
   if (process.platform !== 'darwin') {
     return false
@@ -1789,20 +1892,6 @@ const promptForProjectPermissions = async (webContents, project, permissions) =>
     permissionPromptInFlight.delete(promptKey)
     permissionPrompted.add(promptKey)
   }
-}
-
-const maybePromptProjectPermissions = (webContents, url) => {
-  const project = resolveProjectFromUrl(url)
-  if (!project) {
-    return
-  }
-  void (async () => {
-    const permissions = await readProjectPermissions(project)
-    if (!permissions.length) {
-      return
-    }
-    await promptForProjectPermissions(webContents, project, permissions)
-  })()
 }
 
 // Screenshot capture function for inspect mode
@@ -2143,12 +2232,10 @@ const attach = (event, webContents) => {
     launched = true
 
     updateBrowserConsoleTarget(webContents, url)
-    maybePromptProjectPermissions(webContents, url)
 
   })
   webContents.on('did-navigate-in-page', (event, url) => {
     updateBrowserConsoleTarget(webContents, url)
-    maybePromptProjectPermissions(webContents, url)
   })
   webContents.setWindowOpenHandler((config) => {
     let url = config.url
@@ -2348,6 +2435,9 @@ const createWindow = (port) => {
         console.log('[MEDIA DEBUG] Supported constraints:', navigator.mediaDevices.getSupportedConstraints());
       }
     `).catch(err => console.error('[MEDIA DEBUG] Error checking media devices:', err))
+    if (updateBannerPayload && !(updateBannerPayload.state === 'available' && updateBannerDismissed)) {
+      mainWindow.webContents.send('pinokio:update-banner', updateBannerPayload)
+    }
   })
 
   // Enable screen capture permissions
@@ -2479,6 +2569,60 @@ if (!gotTheLock) {
     installInspectorHandlers()
     installPermissionHandlers()
 
+    ipcMain.on('pinokio:update-banner-action', (_event, payload = {}) => {
+      const action = payload && payload.action
+      if (!action) {
+        return
+      }
+      if (updateTestMode) {
+        if (action === 'update') {
+          startUpdateBannerTestDownload()
+          return
+        }
+        if (action === 'restart') {
+          simulateUpdateBannerRestart()
+          return
+        }
+        if (action === 'dismiss') {
+          updateBannerDismissed = true
+          hideUpdateBanner()
+          return
+        }
+        if (action === 'release-notes') {
+          const target = payload && payload.releaseUrl ? payload.releaseUrl : UPDATE_RELEASES_URL
+          shell.openExternal(target)
+          return
+        }
+      }
+      if (action === 'update') {
+        if (updateDownloadInFlight) {
+          return
+        }
+        updateDownloadInFlight = true
+        updateBannerDismissed = false
+        showUpdateBanner(buildUpdateBannerPayload('downloading', updateInfo, { progressPercent: 0 }))
+        updater.downloadUpdate().catch((err) => {
+          updateDownloadInFlight = false
+          const message = err && err.message ? err.message : 'Update failed'
+          showUpdateBanner(buildUpdateBannerPayload('error', updateInfo, { errorMessage: message }))
+        })
+        return
+      }
+      if (action === 'restart') {
+        updater.quitAndInstall()
+        return
+      }
+      if (action === 'dismiss') {
+        updateBannerDismissed = true
+        hideUpdateBanner()
+        return
+      }
+      if (action === 'release-notes') {
+        const target = payload && payload.releaseUrl ? payload.releaseUrl : UPDATE_RELEASES_URL
+        shell.openExternal(target)
+      }
+    })
+
     // PROMPT
     let promptResponse
     ipcMain.on('prompt', function(eventRet, arg) {
@@ -2604,6 +2748,25 @@ document.querySelector("form").addEventListener("submit", (e) => {
             await clearPersistedSessionCookies()
 
             console.log("cleared all sessions")
+          },
+          requestPermissions: async (payload = {}) => {
+            try {
+              const project = typeof payload.name === 'string' ? payload.name.trim() : ''
+              const permissions = normalizePermissionList(payload.permissions)
+              if (!project || permissions.length === 0) {
+                return { ok: true, skipped: true }
+              }
+              const owner = BrowserWindow.getFocusedWindow() || mainWindow || BrowserWindow.getAllWindows()[0] || null
+              const webContents = owner && owner.webContents ? owner.webContents : null
+              if (!webContents || webContents.isDestroyed()) {
+                return { ok: false, error: 'no-webcontents' }
+              }
+              await promptForProjectPermissions(webContents, project, permissions)
+              return { ok: true }
+            } catch (err) {
+              console.error('[PERMISSION] Failed to prompt via callback', err)
+              return { ok: false, error: err && err.message ? err.message : String(err) }
+            }
           }
         }
       })
@@ -2680,7 +2843,44 @@ document.querySelector("form").addEventListener("submit", (e) => {
       }
     }
     createWindow(PORT)
-    updater.run(mainWindow)
+    if (updateTestMode) {
+      setTimeout(() => {
+        showUpdateBannerTestAvailable()
+      }, 400)
+    } else {
+      updater.setHandlers({
+        onUpdateAvailable: (info) => {
+          updateInfo = info
+          updateDownloadInFlight = false
+          updateBannerDismissed = false
+          showUpdateBanner(buildUpdateBannerPayload('available', info))
+        },
+        onUpdateNotAvailable: () => {
+          updateInfo = null
+          updateDownloadInFlight = false
+          hideUpdateBanner()
+        },
+        onDownloadProgress: (progress) => {
+          updateDownloadInFlight = true
+          const payload = buildUpdateBannerPayload('downloading', updateInfo, {
+            progressPercent: progress && typeof progress.percent === 'number' ? progress.percent : 0,
+            notesPreview: buildProgressLabel(progress)
+          })
+          showUpdateBanner(payload)
+        },
+        onUpdateDownloaded: (info) => {
+          updateInfo = info
+          updateDownloadInFlight = false
+          showUpdateBanner(buildUpdateBannerPayload('ready', info))
+        },
+        onError: (err) => {
+          updateDownloadInFlight = false
+          const message = err && err.message ? err.message : 'Update error'
+          showUpdateBanner(buildUpdateBannerPayload('error', updateInfo, { notesPreview: message }))
+        }
+      })
+      updater.run(mainWindow)
+    }
   })
 
 }

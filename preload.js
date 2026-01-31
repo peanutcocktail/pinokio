@@ -71,6 +71,306 @@ window.electronAPI = {
   },
 }
 
+;(function initUpdateBanner() {
+  if (typeof document === 'undefined') {
+    return
+  }
+  if (window !== window.top) {
+    return
+  }
+
+  const BANNER_HEIGHT = 72
+  const state = {
+    payload: null,
+    banner: null,
+    style: null,
+    layoutActive: false,
+    layoutTick: null,
+    ready: false
+  }
+
+  const ensureStyle = () => {
+    if (state.style) {
+      return
+    }
+    const style = document.createElement('style')
+    style.id = 'pinokio-update-banner-style'
+    style.textContent = `
+      body.pinokio-update-banner-active[data-pinokio-update-layout-root="1"] #layout-root {
+        height: calc(100% - var(--layout-dragger-height, 0px) - var(--pinokio-update-banner-height, 0px));
+      }
+      body.pinokio-update-banner-active:not([data-pinokio-update-layout-root="1"]) {
+        padding-bottom: var(--pinokio-update-banner-height, 0px) !important;
+      }
+      #pinokio-update-banner {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: var(--pinokio-update-banner-height, 72px);
+        display: none;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 10px 16px 12px;
+        box-sizing: border-box;
+        background: linear-gradient(90deg, rgba(24, 24, 30, 0.94), rgba(30, 30, 38, 0.98));
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 -12px 26px rgba(0, 0, 0, 0.35);
+        z-index: 2147483646;
+        color: #f5f5f7;
+        font-family: "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        border-radius: 0;
+      }
+      #pinokio-update-banner .pinokio-update-left {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      #pinokio-update-banner .pinokio-update-title {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.1px;
+      }
+      #pinokio-update-banner .pinokio-update-title.danger {
+        color: #ff7b72;
+      }
+      #pinokio-update-banner .pinokio-update-details {
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.68);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 520px;
+      }
+      #pinokio-update-banner .pinokio-update-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      #pinokio-update-banner button {
+        appearance: none;
+        border: 1px solid transparent;
+        border-radius: 0;
+        padding: 6px 12px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+      }
+      #pinokio-update-banner button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      #pinokio-update-banner .pinokio-update-primary {
+        color: #1b1b1f;
+        background: #f6c251;
+      }
+      #pinokio-update-banner .pinokio-update-primary:hover:not(:disabled) {
+        background: #ffcc66;
+        transform: translateY(-1px);
+      }
+      #pinokio-update-banner .pinokio-update-ghost {
+        color: #f5f5f7;
+        background: transparent;
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+      #pinokio-update-banner .pinokio-update-ghost:hover:not(:disabled) {
+        border-color: rgba(255, 255, 255, 0.35);
+      }
+      #pinokio-update-banner .pinokio-update-progress {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 3px;
+        background: rgba(255, 255, 255, 0.15);
+      }
+      #pinokio-update-banner .pinokio-update-progress-bar {
+        height: 100%;
+        width: 0%;
+        background: #f6c251;
+        transition: width 150ms ease;
+      }
+      #pinokio-update-banner .pinokio-update-hidden {
+        display: none !important;
+      }
+    `
+    const target = document.head || document.documentElement
+    target.appendChild(style)
+    state.style = style
+  }
+
+  const ensureBanner = () => {
+    if (state.banner) {
+      return state.banner
+    }
+    if (!document.body) {
+      return null
+    }
+    ensureStyle()
+    const container = document.createElement('div')
+    container.id = 'pinokio-update-banner'
+    container.innerHTML = `
+      <div class="pinokio-update-left">
+        <div class="pinokio-update-title">Update available</div>
+        <div class="pinokio-update-details"></div>
+      </div>
+      <div class="pinokio-update-actions">
+        <button class="pinokio-update-primary" data-action="update">Update now</button>
+        <button class="pinokio-update-primary pinokio-update-hidden" data-action="restart">Restart now</button>
+        <button class="pinokio-update-ghost pinokio-update-hidden" data-action="release-notes">Release notes</button>
+        <button class="pinokio-update-ghost" data-action="dismiss">Later</button>
+      </div>
+      <div class="pinokio-update-progress pinokio-update-hidden">
+        <div class="pinokio-update-progress-bar"></div>
+      </div>
+    `
+    container.addEventListener('click', (event) => {
+      const button = event.target.closest('button')
+      if (!button) {
+        return
+      }
+      const action = button.getAttribute('data-action')
+      if (!action) {
+        return
+      }
+      if (action === 'release-notes' && state.payload && state.payload.releaseUrl) {
+        ipcRenderer.send('pinokio:update-banner-action', { action, releaseUrl: state.payload.releaseUrl })
+        return
+      }
+      ipcRenderer.send('pinokio:update-banner-action', { action })
+    })
+    document.body.appendChild(container)
+    state.banner = container
+    return container
+  }
+
+  const notifyLayoutResize = () => {
+    if (state.layoutTick) {
+      cancelAnimationFrame(state.layoutTick)
+    }
+    state.layoutTick = requestAnimationFrame(() => {
+      state.layoutTick = null
+      try {
+        window.dispatchEvent(new CustomEvent('pinokio:viewport-change', {
+          detail: { height: window.innerHeight }
+        }))
+      } catch (_) {
+        window.dispatchEvent(new Event('resize'))
+      }
+    })
+  }
+
+  const applyLayoutOffset = (active) => {
+    if (!document.body) {
+      return
+    }
+    const hasLayoutRoot = Boolean(document.getElementById('layout-root'))
+    if (hasLayoutRoot) {
+      document.body.setAttribute('data-pinokio-update-layout-root', '1')
+    } else {
+      document.body.removeAttribute('data-pinokio-update-layout-root')
+    }
+    document.documentElement.style.setProperty('--pinokio-update-banner-height', `${BANNER_HEIGHT}px`)
+    document.body.classList.toggle('pinokio-update-banner-active', Boolean(active))
+    if (state.layoutActive !== Boolean(active)) {
+      state.layoutActive = Boolean(active)
+      notifyLayoutResize()
+    }
+  }
+
+  const setHidden = (node, hidden) => {
+    if (!node) return
+    node.classList.toggle('pinokio-update-hidden', Boolean(hidden))
+  }
+
+  const render = (payload) => {
+    state.payload = payload
+    if (!payload || payload.state === 'hidden') {
+      if (state.banner) {
+        state.banner.style.display = 'none'
+      }
+      applyLayoutOffset(false)
+      return
+    }
+    const banner = ensureBanner()
+    if (!banner) {
+      return
+    }
+    banner.style.display = 'flex'
+    applyLayoutOffset(true)
+
+    const title = banner.querySelector('.pinokio-update-title')
+    const details = banner.querySelector('.pinokio-update-details')
+    const updateNow = banner.querySelector('[data-action="update"]')
+    const restartNow = banner.querySelector('[data-action="restart"]')
+    const releaseNotes = banner.querySelector('[data-action="release-notes"]')
+    const progress = banner.querySelector('.pinokio-update-progress')
+    const progressBar = banner.querySelector('.pinokio-update-progress-bar')
+
+    const stateKey = payload.state || 'available'
+    const version = payload.version ? `Version ${payload.version}` : ''
+    const notes = payload.notesPreview || ''
+    const detail = [version, notes].filter(Boolean).join(' - ')
+
+    let titleText = 'Update available'
+    if (stateKey === 'downloading') titleText = 'Downloading update'
+    if (stateKey === 'ready') titleText = 'Update ready'
+    if (stateKey === 'error') titleText = 'Update failed'
+
+    if (title) {
+      title.textContent = titleText
+      if (stateKey === 'error') {
+        title.classList.add('danger')
+      } else {
+        title.classList.remove('danger')
+      }
+    }
+    if (details) {
+      details.textContent = detail
+    }
+
+    if (updateNow) {
+      updateNow.textContent = stateKey === 'error' ? 'Retry' : 'Update now'
+      updateNow.disabled = stateKey === 'downloading'
+    }
+
+    setHidden(updateNow, stateKey === 'ready')
+    setHidden(restartNow, stateKey !== 'ready')
+    setHidden(progress, stateKey !== 'downloading')
+    setHidden(releaseNotes, !payload.releaseUrl)
+
+    if (progressBar) {
+      if (stateKey === 'downloading' && typeof payload.progressPercent === 'number') {
+        const percent = Math.max(0, Math.min(100, payload.progressPercent))
+        progressBar.style.width = `${percent}%`
+      } else {
+        progressBar.style.width = '0%'
+      }
+    }
+  }
+
+  ipcRenderer.on('pinokio:update-banner', (_event, payload) => {
+    render(payload)
+  })
+
+  const ready = () => {
+    state.ready = true
+    if (state.payload) {
+      render(state.payload)
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ready, { once: true })
+  } else {
+    ready()
+  }
+})()
+
 ;(function initInspector() {
   if (typeof document === 'undefined') {
     return
