@@ -2861,7 +2861,6 @@ document.querySelector("form").addEventListener("submit", (e) => {
           hideUpdateBanner()
         },
         onDownloadProgress: (progress) => {
-          updateDownloadInFlight = true
           const payload = buildUpdateBannerPayload('downloading', updateInfo, {
             progressPercent: progress && typeof progress.percent === 'number' ? progress.percent : 0,
             notesPreview: buildProgressLabel(progress)
@@ -2874,7 +2873,12 @@ document.querySelector("form").addEventListener("submit", (e) => {
           showUpdateBanner(buildUpdateBannerPayload('ready', info))
         },
         onError: (err) => {
+          const wasDownloading = updateDownloadInFlight
           updateDownloadInFlight = false
+          if (!wasDownloading) {
+            console.warn('Update check error:', err)
+            return
+          }
           const message = err && err.message ? err.message : 'Update error'
           showUpdateBanner(buildUpdateBannerPayload('error', updateInfo, { notesPreview: message }))
         }
