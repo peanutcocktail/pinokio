@@ -1,7 +1,7 @@
 {
   "name": "Pinokio",
   "private": true,
-  "version": "6.0.15",
+  "version": "6.0.16",
   "homepage": "https://pinokio.co",
   "description": "pinokio",
   "main": "main.js",
@@ -74,6 +74,8 @@
         }
       ],
       "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Pinokio needs microphone access for apps that use audio.",
         "NSCameraUsageDescription": "Pinokio needs camera access for apps that use video."
@@ -149,7 +151,7 @@
     "electron-store": "^8.1.0",
     "electron-updater": "^6.6.2",
     "electron-window-state": "^5.0.3",
-    "pinokiod": "^6.0.15"
+    "pinokiod": "^6.0.16"
   },
   "devDependencies": {
     "@electron/rebuild": "3.2.10",
