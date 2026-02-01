@@ -1719,6 +1719,10 @@ const permissionLabels = {
   screen_capture: 'Screen Recording'
 }
 
+const logPermission = (...args) => {
+  console.log('[PERMISSION]', ...args)
+}
+
 const permissionHints = {
   darwin: {
     microphone: 'System Settings → Privacy & Security → Microphone',
@@ -1754,6 +1758,9 @@ const getMediaAccessStatusSafe = (mediaType) => {
 const requestMediaPermission = async (permission) => {
   const platform = process.platform
   if (permission === 'microphone' || permission === 'camera') {
+    const preStatus = getMediaAccessStatusSafe(permission)
+    const canAsk = platform === 'darwin' && systemPreferences && typeof systemPreferences.askForMediaAccess === 'function'
+    logPermission('requestMediaPermission', permission, { platform, preStatus, canAsk })
     let granted = false
     if (platform === 'darwin' && systemPreferences && typeof systemPreferences.askForMediaAccess === 'function') {
       granted = await systemPreferences.askForMediaAccess(permission)
@@ -1762,12 +1769,15 @@ const requestMediaPermission = async (permission) => {
     if (status === 'granted') {
       granted = true
     }
+    logPermission('requestMediaPermission result', permission, { status, granted })
     return { status, granted }
   }
   if (permission === 'screen' || permission === 'screen_capture') {
     const status = getMediaAccessStatusSafe('screen')
+    logPermission('requestMediaPermission screen', permission, { status })
     return { status, granted: status === 'granted' }
   }
+  logPermission('requestMediaPermission unsupported', permission)
   return { status: 'unsupported', granted: false }
 }
 
@@ -1828,24 +1838,33 @@ const promptForProjectPermissions = async (webContents, project, permissions) =>
   }
   const promptKey = `${project}:${permissions.join(',')}`
   if (permissionPromptInFlight.has(promptKey) || permissionPrompted.has(promptKey)) {
+    logPermission('prompt skipped (already prompted)', { project, permissions })
     return
   }
+  logPermission('prompt start', { project, permissions })
   const pending = []
   const blocked = []
+  const statusInfo = []
   for (const permission of permissions) {
     const statusTarget = (permission === 'screen' || permission === 'screen_capture') ? 'screen' : permission
     const status = getMediaAccessStatusSafe(statusTarget)
     if (status === 'granted') {
+      statusInfo.push({ permission, status, action: 'skip' })
       continue
     }
     if (status === 'denied') {
       blocked.push(permission)
+      statusInfo.push({ permission, status, action: 'blocked' })
     } else if (canRequestPermission(permission)) {
       pending.push(permission)
+      statusInfo.push({ permission, status, action: 'pending' })
     } else {
       blocked.push(permission)
+      statusInfo.push({ permission, status, action: 'blocked' })
     }
   }
+  logPermission('prompt status', statusInfo)
+  logPermission('prompt lists', { pending, blocked })
   if (pending.length === 0 && blocked.length === 0) {
     return
   }
@@ -1867,6 +1886,7 @@ const promptForProjectPermissions = async (webContents, project, permissions) =>
         detail: `This app requests ${label} access. Click "Allow" to show the OS permission prompt.`,
         noLink: true
       })
+      logPermission('prompt response', { project, permissions: pending, response })
       if (response === 0) {
         for (const permission of pending) {
           const result = await requestMediaPermission(permission)
@@ -1877,6 +1897,7 @@ const promptForProjectPermissions = async (webContents, project, permissions) =>
       }
     }
     if (denied.length > 0) {
+      logPermission('prompt denied', { project, denied })
       const message = buildPermissionMessage(process.platform, denied)
       if (message) {
         await dialog.showMessageBox(owner, {
@@ -2753,12 +2774,15 @@ document.querySelector("form").addEventListener("submit", (e) => {
             try {
               const project = typeof payload.name === 'string' ? payload.name.trim() : ''
               const permissions = normalizePermissionList(payload.permissions)
+              logPermission('callback received', { project, permissions })
               if (!project || permissions.length === 0) {
+                logPermission('callback skipped (missing project or permissions)', { project, permissions })
                 return { ok: true, skipped: true }
               }
               const owner = BrowserWindow.getFocusedWindow() || mainWindow || BrowserWindow.getAllWindows()[0] || null
               const webContents = owner && owner.webContents ? owner.webContents : null
               if (!webContents || webContents.isDestroyed()) {
+                logPermission('callback failed (no webContents)', { project, permissions })
                 return { ok: false, error: 'no-webcontents' }
               }
               await promptForProjectPermissions(webContents, project, permissions)
