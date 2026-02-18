@@ -1,4 +1,4 @@
-const {app, screen, shell, BrowserWindow, BrowserView, ipcMain, dialog, clipboard, session, desktopCapturer, systemPreferences } = require('electron')
+const {app, screen, shell, BrowserWindow, BrowserView, ipcMain, dialog, clipboard, session, desktopCapturer, systemPreferences, Menu } = require('electron')
 const windowStateKeeper = require('electron-window-state');
 const fs = require('fs')
 const path = require("path")
@@ -2014,6 +2014,169 @@ const captureScreenshotRegion = async (bounds) => {
 //}
 
 
+const pushContextMenuSeparator = (template) => {
+  if (!template.length) {
+    return
+  }
+  if (template[template.length - 1].type === 'separator') {
+    return
+  }
+  template.push({ type: 'separator' })
+}
+const buildBrowserContextMenuTemplate = (webContents, params = {}) => {
+  const template = []
+  const linkURL = typeof params.linkURL === 'string' ? params.linkURL : ''
+  const srcURL = typeof params.srcURL === 'string' ? params.srcURL : ''
+  const selectionText = typeof params.selectionText === 'string' ? params.selectionText : ''
+  const hasSelection = selectionText.trim().length > 0
+  const editFlags = params.editFlags || {}
+  const isEditable = Boolean(params.isEditable)
+  const hasMediaSource = typeof params.mediaType === 'string' && params.mediaType !== 'none' && srcURL
+  const canSuggestSpelling = Array.isArray(params.dictionarySuggestions) && params.dictionarySuggestions.length > 0
+  const hasMisspelledWord = typeof params.misspelledWord === 'string' && params.misspelledWord.length > 0
+  const owner = webContents && !webContents.isDestroyed() ? webContents.getOwnerBrowserWindow() : null
+  const canGoBack = Boolean(webContents && webContents.canGoBack && webContents.canGoBack())
+  const canGoForward = Boolean(webContents && webContents.canGoForward && webContents.canGoForward())
+
+  if (linkURL) {
+    template.push({
+      label: 'Open Link in New Window',
+      click: () => {
+        try {
+          if (typeof loadNewWindow === 'function' && PORT) {
+            loadNewWindow(linkURL, PORT)
+            return
+          }
+        } catch (error) {
+        }
+        shell.openExternal(linkURL).catch(() => {})
+      }
+    })
+    template.push({
+      label: 'Open Link in Browser',
+      click: () => {
+        shell.openExternal(linkURL).catch(() => {})
+      }
+    })
+    template.push({
+      label: 'Copy Link Address',
+      click: () => clipboard.writeText(linkURL)
+    })
+    pushContextMenuSeparator(template)
+  }
+
+  if (hasMediaSource) {
+    template.push({
+      label: 'Open Media in Browser',
+      click: () => {
+        shell.openExternal(srcURL).catch(() => {})
+      }
+    })
+    template.push({
+      label: 'Copy Media Address',
+      click: () => clipboard.writeText(srcURL)
+    })
+    pushContextMenuSeparator(template)
+  }
+
+  if (!isEditable) {
+    template.push({
+      label: 'Back',
+      enabled: canGoBack,
+      click: () => {
+        if (webContents && !webContents.isDestroyed() && webContents.canGoBack()) {
+          webContents.goBack()
+        }
+      }
+    })
+    template.push({
+      label: 'Forward',
+      enabled: canGoForward,
+      click: () => {
+        if (webContents && !webContents.isDestroyed() && webContents.canGoForward()) {
+          webContents.goForward()
+        }
+      }
+    })
+    template.push({
+      label: 'Reload',
+      click: () => {
+        if (webContents && !webContents.isDestroyed()) {
+          webContents.reload()
+        }
+      }
+    })
+    pushContextMenuSeparator(template)
+  }
+
+  if (isEditable) {
+    if (canSuggestSpelling && hasMisspelledWord) {
+      for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
+        template.push({
+          label: suggestion,
+          click: () => {
+            if (webContents && !webContents.isDestroyed()) {
+              webContents.replaceMisspelling(suggestion)
+            }
+          }
+        })
+      }
+      template.push({
+        label: 'Add to Dictionary',
+        click: () => {
+          try {
+            if (webContents && !webContents.isDestroyed() && webContents.session && typeof webContents.session.addWordToSpellCheckerDictionary === 'function') {
+              webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
+            }
+          } catch (error) {
+          }
+        }
+      })
+      pushContextMenuSeparator(template)
+    }
+    template.push({ role: 'undo', enabled: editFlags.canUndo !== false })
+    template.push({ role: 'redo', enabled: editFlags.canRedo !== false })
+    pushContextMenuSeparator(template)
+    template.push({ role: 'cut', enabled: editFlags.canCut !== false })
+    template.push({ role: 'copy', enabled: editFlags.canCopy !== false })
+    template.push({ role: 'paste', enabled: editFlags.canPaste !== false })
+    template.push({ role: 'delete', enabled: editFlags.canDelete !== false })
+    pushContextMenuSeparator(template)
+    template.push({ role: 'selectAll' })
+  } else {
+    if (hasSelection) {
+      template.push({ role: 'copy' })
+    }
+    template.push({ role: 'selectAll' })
+  }
+
+  pushContextMenuSeparator(template)
+  template.push({
+    label: 'Inspect Element',
+    click: () => {
+      if (!webContents || webContents.isDestroyed()) {
+        return
+      }
+      if (!webContents.isDevToolsOpened()) {
+        webContents.openDevTools({ mode: 'detach' })
+      }
+      const x = typeof params.x === 'number' ? params.x : null
+      const y = typeof params.y === 'number' ? params.y : null
+      if (x !== null && y !== null) {
+        webContents.inspectElement(x, y)
+      }
+    }
+  })
+
+  if (template.length && template[template.length - 1].type === 'separator') {
+    template.pop()
+  }
+
+  if (owner && owner.isDestroyed()) {
+    return []
+  }
+  return template
+}
 const attach = (event, webContents) => {
   let wc = webContents
 
@@ -2257,6 +2420,19 @@ const attach = (event, webContents) => {
   })
   webContents.on('did-navigate-in-page', (event, url) => {
     updateBrowserConsoleTarget(webContents, url)
+  })
+  webContents.on('context-menu', (event, params) => {
+    const template = buildBrowserContextMenuTemplate(webContents, params)
+    if (!template.length) {
+      return
+    }
+    const menu = Menu.buildFromTemplate(template)
+    const win = webContents.getOwnerBrowserWindow()
+    if (win && !win.isDestroyed()) {
+      menu.popup({ window: win })
+      return
+    }
+    menu.popup()
   })
   webContents.setWindowOpenHandler((config) => {
     let url = config.url
