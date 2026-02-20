@@ -374,6 +374,7 @@ const ensureSplashWindow = () => {
     skipTaskbar: true,
     fullscreenable: false,
     webPreferences: {
+      spellcheck: false,
       backgroundThrottling: false
     }
   })
@@ -2472,6 +2473,7 @@ const attach = (event, webContents) => {
           webPreferences: {
             session: session.defaultSession,
             webSecurity: false,
+            spellcheck: false,
             nativeWindowOpen: true,
             contextIsolation: false,
             nodeIntegrationInSubFrames: true,
@@ -2498,6 +2500,7 @@ const attach = (event, webContents) => {
               webPreferences: {
                 session: session.defaultSession,
                 webSecurity: false,
+                spellcheck: false,
                 nativeWindowOpen: true,
                 contextIsolation: false,
                 nodeIntegrationInSubFrames: true,
@@ -2608,6 +2611,7 @@ const createWindow = (port) => {
     webPreferences: {
       session: session.defaultSession,
       webSecurity: false,
+      spellcheck: false,
       nativeWindowOpen: true,
       contextIsolation: false,
       nodeIntegrationInSubFrames: true,
@@ -2680,6 +2684,7 @@ const loadNewWindow = (url, port) => {
     webPreferences: {
       session: session.defaultSession,
       webSecurity: false,
+      spellcheck: false,
       nativeWindowOpen: true,
       contextIsolation: false,
       nodeIntegrationInSubFrames: true,
@@ -2844,6 +2849,7 @@ if (!gotTheLock) {
         webPreferences: {
           session: session.defaultSession,
           webSecurity: false,
+          spellcheck: false,
           nativeWindowOpen: true,
           contextIsolation: false,
           nodeIntegrationInSubFrames: true,
