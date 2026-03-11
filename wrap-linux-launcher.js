@@ -21,8 +21,6 @@ module.exports = async (context) => {
   fs.renameSync(exePath, wrappedExePath)
 
   const wrapperScript = `#!/usr/bin/env sh
-export ELECTRON_OZONE_PLATFORM_HINT=x11
-export ELECTRON_DISABLE_GPU=1
 SCRIPT_PATH="$0"
 RESOLVED_PATH=""
 
@@ -49,7 +47,27 @@ else
   TARGET_BIN="$LOCAL_BIN"
 fi
 
-exec "$TARGET_BIN" --ozone-platform=x11 --disable-gpu --disable-gpu-sandbox "$@"
+# GPU acceleration flags safe for modern Linux GPUs (NVIDIA CUDA, AMD ROCm, Intel Arc)
+GPU_FLAGS="--enable-gpu-rasterization --ignore-gpu-blocklist --enable-zero-copy --enable-features=AcceleratedVideoDecodeLinuxGL --disable-features=UseChromeOSDirectVideoDecoder"
+
+# Optional: Vulkan ANGLE backend (recommended for Wayland + modern GPUs)
+#   PINOKIO_USE_VULKAN=1 pinokio
+if [ "$PINOKIO_USE_VULKAN" = "1" ]; then
+  GPU_FLAGS="$GPU_FLAGS --use-angle=vulkan --use-cmd-decoder=passthrough"
+fi
+
+# Optional: Disable GPU acceleration entirely (fallback for broken drivers or VMs)
+#   PINOKIO_DISABLE_GPU=1 pinokio
+if [ "$PINOKIO_DISABLE_GPU" = "1" ]; then
+  GPU_FLAGS="--disable-gpu --disable-gpu-sandbox"
+fi
+
+# Usage from terminal:
+#   pinokio                              # Default: GPU acceleration enabled
+#   PINOKIO_USE_VULKAN=1 pinokio         # Enable Vulkan backend (Wayland + modern GPUs)
+#   PINOKIO_DISABLE_GPU=1 pinokio        # Disable GPU acceleration (troubleshooting)
+
+exec "$TARGET_BIN" $GPU_FLAGS "$@"
 `
 
   fs.writeFileSync(exePath, wrapperScript, { mode: originalStat.mode || 0o755 })

@@ -5,12 +5,14 @@ const pinokiod = new Pinokiod(config)
 
 if (process.platform === 'linux') {
   console.log('[PINOKIO DEBUG] Linux startup')
-  console.log('[PINOKIO DEBUG] ELECTRON_OZONE_PLATFORM_HINT:', process.env.ELECTRON_OZONE_PLATFORM_HINT || '<unset>')
-  console.log('[PINOKIO DEBUG] ELECTRON_DISABLE_GPU:', process.env.ELECTRON_DISABLE_GPU || '<unset>')
   console.log('[PINOKIO DEBUG] DISPLAY:', process.env.DISPLAY || '<unset>')
   console.log('[PINOKIO DEBUG] WAYLAND_DISPLAY:', process.env.WAYLAND_DISPLAY || '<unset>')
+  console.log('[PINOKIO DEBUG] PINOKIO_DISABLE_GPU:', process.env.PINOKIO_DISABLE_GPU || '<unset>')
+  console.log('[PINOKIO DEBUG] PINOKIO_USE_VULKAN:', process.env.PINOKIO_USE_VULKAN || '<unset>')
   console.log('[PINOKIO DEBUG] argv:', process.argv.join(' '))
-  app.disableHardwareAcceleration()
+  if (process.env.PINOKIO_DISABLE_GPU === '1') {
+    app.disableHardwareAcceleration()
+  }
 }
 
 let mode = pinokiod.kernel.store.get("mode") || "full"
