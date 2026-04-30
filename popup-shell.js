@@ -1,6 +1,7 @@
 const path = require('path')
 const windowStateKeeper = require('electron-window-state')
 const { BrowserWindow, WebContentsView, session } = require('electron')
+const { buildBrowserLikeUserAgent } = require('./user-agent')
 
 const parseUrl = (value, base) => {
   try {
@@ -27,18 +28,6 @@ module.exports = ({
 } = {}) => {
   let openPinokioHomeWindow = null
   const popupBrowserPartition = 'persist:pinokio-popup-browser'
-  const buildBrowserLikeUserAgent = () => {
-    const chromeVersion = process.versions.chrome || '140.0.0.0'
-    if (process.platform === 'darwin') {
-      return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
-    }
-    if (process.platform === 'win32') {
-      const arch = process.arch === 'arm64' ? 'ARM64' : 'x64'
-      return `Mozilla/5.0 (Windows NT 10.0; Win64; ${arch}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
-    }
-    const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64'
-    return `Mozilla/5.0 (X11; Linux ${arch}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
-  }
   const browserLikeUserAgent = buildBrowserLikeUserAgent()
   const getPopupBrowserSession = () => {
     const popupSession = session.fromPartition(popupBrowserPartition)

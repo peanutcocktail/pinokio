@@ -6,6 +6,10 @@ const Pinokiod = require("pinokiod")
 const os = require('os')
 const Updater = require('./updater')
 const createPopupShellManager = require('./popup-shell')
+const {
+  configurePinokioUserAgent,
+  sanitizeUserAgentForRequests
+} = require('./user-agent')
 const is_mac = process.platform.startsWith("darwin")
 const platform = os.platform()
 var mainWindow;
@@ -3266,13 +3270,13 @@ const attach = (event, webContents) => {
 
   webContents.session.webRequest.onBeforeSendHeaders((details, callback) => {
 
-    let ua = details.requestHeaders['User-Agent']
+    const userAgentHeader = Object.keys(details.requestHeaders || {}).find((key) => key.toLowerCase() === 'user-agent')
+    let ua = userAgentHeader ? details.requestHeaders[userAgentHeader] : null
 //    console.log("User Agent Before", ua)
     if (ua) {
-      ua = ua.replace(/ pinokio\/[0-9.]+/i, '');
-      ua = ua.replace(/Electron\/.+ /i,'');
+      ua = sanitizeUserAgentForRequests(ua)
 //      console.log("User Agent After", ua)
-      details.requestHeaders['User-Agent'] = ua;
+      details.requestHeaders[userAgentHeader] = ua;
     }
 
 
@@ -3704,7 +3708,7 @@ if (!gotTheLock) {
   
   app.whenReady().then(async () => {
     console.log('App is ready, about to install inspector handlers...')
-    app.userAgentFallback = "Pinokio"
+    configurePinokioUserAgent({ app, session: session.defaultSession })
 
     installInspectorHandlers()
     installInjectorHandlers()

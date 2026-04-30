@@ -9,6 +9,8 @@
   "author": "https://twitter.com/cocktailpeanut",
   "scripts": {
     "start": "electron .",
+    "diagnose:user-agent": "electron script/run-user-agent-diagnostic.js",
+    "test:user-agent": "node script/run-user-agent-test.js",
     "test:update-banner": "node script/run-update-banner-test.js",
     "pack": "./node_modules/.bin/electron-builder --dir",
     "eject": "hdiutil info | grep '/dev/disk' | awk '{print $1}' | xargs -I {} hdiutil detach {}",
