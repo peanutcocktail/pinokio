@@ -94,12 +94,15 @@ const configurePinokioUserAgent = ({
   return userAgent
 }
 
-const sanitizeUserAgentForRequests = (userAgent) => {
+const sanitizeUserAgentForRequests = (userAgent, options = {}) => {
   if (typeof userAgent !== 'string' || !userAgent) {
     return userAgent
   }
-  return userAgent
-    .replace(/\s+Pinokio\/[^\s]+/ig, '')
+  const preservePinokio = options && options.preservePinokio === true
+  const sanitized = preservePinokio
+    ? userAgent
+    : userAgent.replace(/\s+Pinokio\/[^\s]+/ig, '')
+  return sanitized
     .replace(/\s+Electron\/[^\s]+/ig, '')
     .replace(/\s{2,}/g, ' ')
     .trim()

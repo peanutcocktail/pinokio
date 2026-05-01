@@ -47,6 +47,13 @@ for (const item of cases) {
   assert.match(networkUa, /Chrome\/142\.0\.7444\.175 Safari\/537\.36/)
   assert.doesNotMatch(networkUa, /Pinokio\//)
   assert.doesNotMatch(networkUa, /Electron\//)
+
+  const pinokiodUa = sanitizeUserAgentForRequests(`${ua} Electron/39.2.3`, {
+    preservePinokio: true
+  })
+  assert.match(pinokiodUa, /Chrome\/142\.0\.7444\.175 Safari\/537\.36/)
+  assert.match(pinokiodUa, new RegExp(`Pinokio/${appVersion}$`))
+  assert.doesNotMatch(pinokiodUa, /Electron\//)
 }
 
 const baseUa = buildChromiumUserAgent({

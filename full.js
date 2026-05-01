@@ -256,6 +256,51 @@ const isPinokioNavigationUrl = (value, base) => {
   }
   return popupShellManager.isPinokioWindowUrl(target.href, root_url) || isPinokioNavigationHost(target.hostname)
 }
+const normalizeRequestHostname = (value) => String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
+const isPinokiodRouterHost = (hostname) => hostname === 'pinokio.localhost'
+const getRequestPort = (target) => {
+  if (!target) {
+    return ''
+  }
+  return target.port || (target.protocol === 'https:' ? '443' : target.protocol === 'http:' ? '80' : '')
+}
+const getLocalRequestHosts = () => {
+  const hosts = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1'])
+  try {
+    const interfaces = os.networkInterfaces() || {}
+    for (const entries of Object.values(interfaces)) {
+      for (const entry of entries || []) {
+        if (entry && entry.address) {
+          hosts.add(normalizeRequestHostname(entry.address))
+        }
+      }
+    }
+  } catch (_) {
+  }
+  return hosts
+}
+const isPinokiodServerRequestUrl = (value, base) => {
+  const target = safeParseUrl(value, base || (root_url || undefined))
+  if (!target || (target.protocol !== 'http:' && target.protocol !== 'https:')) {
+    return false
+  }
+
+  const rootTarget = safeParseUrl(root_url)
+  if (rootTarget && target.origin === rootTarget.origin) {
+    return true
+  }
+
+  const hostname = normalizeRequestHostname(target.hostname)
+  if (isPinokiodRouterHost(hostname)) {
+    return true
+  }
+
+  const pinokiodPort = PORT ? String(PORT) : ''
+  if (!pinokiodPort || getRequestPort(target) !== pinokiodPort) {
+    return false
+  }
+  return hostname.endsWith('.localhost') || getLocalRequestHosts().has(hostname)
+}
 const getHttpNavigationTarget = (value, base) => {
   const target = safeParseUrl(value, base)
   if (!target || (target.protocol !== 'http:' && target.protocol !== 'https:')) {
@@ -3273,8 +3318,11 @@ const attach = (event, webContents) => {
     const userAgentHeader = Object.keys(details.requestHeaders || {}).find((key) => key.toLowerCase() === 'user-agent')
     let ua = userAgentHeader ? details.requestHeaders[userAgentHeader] : null
 //    console.log("User Agent Before", ua)
+    const preservePinokioUserAgent = isPinokiodServerRequestUrl(details.url, root_url || undefined)
     if (ua) {
-      ua = sanitizeUserAgentForRequests(ua)
+      ua = sanitizeUserAgentForRequests(ua, {
+        preservePinokio: preservePinokioUserAgent
+      })
 //      console.log("User Agent After", ua)
       details.requestHeaders[userAgentHeader] = ua;
     }
