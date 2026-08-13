@@ -1170,7 +1170,7 @@ const buildInspectorInjection = () => {
 
       const post = (type, payload) => {
         try {
-          window.parent.postMessage({ pinokioInspector: { type, frameUrl: window.location.href, ...payload } }, '*')
+          window.parent.postMessage({ pinokioInspector: { type, frameUrl: window.location.href, ...payload } }, window.location.origin || '*')
         } catch (err) {
           // ignore
         }
@@ -1300,7 +1300,7 @@ const buildInspectorInjection = () => {
               window.parent.postMessage({
                 pinokioScreenshotRequest: screenshotRequest,
                 messageId: messageId
-              }, '*')
+              }, window.location.origin || '*')
               
               // Timeout after 3 seconds
               setTimeout(() => {
@@ -1367,7 +1367,7 @@ const buildInspectorInjection = () => {
       post('started', {})
     } catch (error) {
       try {
-        window.parent.postMessage({ pinokioInspector: { type: 'error', frameUrl: window.location.href, message: error && error.message ? error.message : String(error) } }, '*')
+        window.parent.postMessage({ pinokioInspector: { type: 'error', frameUrl: window.location.href, message: error && error.message ? error.message : String(error) } }, window.location.origin || '*')
       } catch (_) {}
     }
   }
@@ -1586,7 +1586,7 @@ const buildScreenshotRelayInjection = () => {
           })
 
           if (window.parent && window.parent !== window) {
-            window.parent.postMessage(data, '*')
+            window.parent.postMessage(data, window.location.origin || '*')
             if (event && typeof event.stopImmediatePropagation === 'function') {
               event.stopImmediatePropagation()
             }
@@ -1624,7 +1624,7 @@ const buildScreenshotRelayInjection = () => {
                   messageId,
                   success: true,
                   screenshot
-                }, '*')
+                }, window.location.origin || '*')
               } catch (error) {
                 log('top-level-response-error', {
                   href: window.location.href,
@@ -1645,7 +1645,7 @@ const buildScreenshotRelayInjection = () => {
                   messageId,
                   success: false,
                   error: error && error.message ? error.message : String(error)
-                }, '*')
+                }, window.location.origin || '*')
               } catch (responseError) {
                 log('top-level-response-error', {
                   href: window.location.href,
@@ -1670,7 +1670,7 @@ const buildScreenshotRelayInjection = () => {
                 href: window.location.href,
                 messageId: data.messageId
               })
-              target.postMessage(data, '*')
+              target.postMessage(data, window.location.origin || '*')
               return
             } catch (error) {
               log('response-forwarding-error', {
@@ -1687,7 +1687,7 @@ const buildScreenshotRelayInjection = () => {
             hasParent: Boolean(window.parent && window.parent !== window)
           })
           if (window.parent && window.parent !== window) {
-            window.parent.postMessage(data, '*')
+            window.parent.postMessage(data, window.location.origin || '*')
           }
         }
       }, true)
@@ -2118,6 +2118,7 @@ const matchesPinokioInjectPattern = (pattern, currentUrl) => {
     : resolvePinokioRelativeMatchTarget(currentUrl)
   const expression = pinokioPatternToExpression(normalizedPattern)
   try {
+    if (expression.length > 2048) { return false }
     return new RegExp(expression).test(sourceValue)
   } catch (_) {
     return false
@@ -2316,7 +2317,7 @@ const buildPinokioInjectRuntimeBootstrap = () => {
             event: eventName.trim(),
             payload: (payload && typeof payload === 'object') ? payload : {},
             context: nextContext
-          }, '*')
+          }, window.location.origin || '*')
           return { ok: true, handled: true, event: eventName.trim() }
         }
       }
@@ -2470,6 +2471,14 @@ const executePinokioInjectDescriptor = async (frame, descriptor, context) => {
     throw new Error(`Unable to load injector source: ${status}`)
   }
   const source = await response.text()
+  if (descriptor.integrity) {
+    const [algo, expectedHash] = descriptor.integrity.split('-')
+    const { createHash } = require('crypto')
+    const actualHash = createHash(algo).update(source).digest('base64')
+    if (actualHash !== expectedHash) {
+      throw new Error(`Integrity check failed for injector source: ${sourceUrl}`)
+    }
+  }
   const resolvedDescriptor = {
     ...sourceDescriptor,
     src: sourceUrl
