@@ -14,7 +14,7 @@ const sendPinokio = (action) => {
   }
   try {
     if (window.parent === window.top) {
-      window.parent.postMessage({ action }, "*")
+      window.parent.postMessage({ action }, window.location.origin)
     }
   } catch (_) {
   }
@@ -1024,8 +1024,12 @@ if (isEmbeddedFrame) {
       }
       try {
         // Convert data URL to blob
-        const response = await fetch(img.src)
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 10000)
+        const response = await fetch(img.src, { signal: controller.signal })
+        clearTimeout(timeoutId)
         const blob = await response.blob()
+        if (blob.size > 10 * 1024 * 1024) throw new Error('Image too large to copy')
         
         if (navigator.clipboard && navigator.clipboard.write) {
           const clipboardItem = new ClipboardItem({ 'image/png': blob })
