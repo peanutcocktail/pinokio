@@ -3634,15 +3634,6 @@ const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
   app.quit()
 } else {
-  app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
-    
-      // Prevent having error
-      event.preventDefault()
-      // and continue
-      callback(true)
-
-  })
-
   app.on('second-instance', (event, argv) => {
 
     if (!mainWindow || mainWindow.isDestroyed()) {
