@@ -1,10 +1,11 @@
-const { app, Tray, Menu, shell, nativeImage, BrowserWindow, session, Notification } = require('electron');
+const { app, Tray, Menu, shell, nativeImage, BrowserWindow, session, Notification, dialog } = require('electron');
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
 const Pinokiod = require("pinokiod")
 const config = require('./config')
 const Updater = require('./updater')
+const { confirmArchitecture } = require('./architecture-warning')
 const { configurePinokioUserAgent } = require('./user-agent')
 const pinokiod = new Pinokiod(config)
 const updater = new Updater()
@@ -146,6 +147,9 @@ app.on('second-instance', () => {
 
 app.whenReady().then(async () => {
   if (!gotTheLock) {
+    return
+  }
+  if (!await confirmArchitecture({ app, dialog, shell })) {
     return
   }
   configurePinokioUserAgent({ app, session: session.defaultSession })
